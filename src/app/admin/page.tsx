@@ -2414,11 +2414,11 @@ function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () => void
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-[10px] font-display tracking-widest uppercase text-white/30 mb-1.5">Company Rep Signature</label>
-              <ImageUploadField value={companySignoffAssets.companyRepSignatureUrl} onChange={(v) => setCompanySignoffAssets((s) => ({ ...s, companyRepSignatureUrl: v }))} folder="signoffs" />
+              <ImageUploadField value={companySignoffAssets.companyRepSignatureUrl} onChange={(v) => setCompanySignoffAssets((s) => ({ ...s, companyRepSignatureUrl: v }))} folder="signoffs" signature />
             </div>
             <div>
               <label className="block text-[10px] font-display tracking-widest uppercase text-white/30 mb-1.5">Witness (Company) Signature</label>
-              <ImageUploadField value={companySignoffAssets.companyWitnessSignatureUrl} onChange={(v) => setCompanySignoffAssets((s) => ({ ...s, companyWitnessSignatureUrl: v }))} folder="signoffs" />
+              <ImageUploadField value={companySignoffAssets.companyWitnessSignatureUrl} onChange={(v) => setCompanySignoffAssets((s) => ({ ...s, companyWitnessSignatureUrl: v }))} folder="signoffs" signature />
             </div>
             <div>
               <label className="block text-[10px] font-display tracking-widest uppercase text-white/30 mb-1.5">Approved-by Name</label>

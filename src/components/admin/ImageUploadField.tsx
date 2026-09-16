@@ -4,12 +4,26 @@ import { useRef, useState, type ChangeEvent } from 'react';
 import toast from 'react-hot-toast';
 import { Upload, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { cleanSignatureImage } from '@/lib/signature-image';
 
 const BUCKET = 'mejasan-media';
 
 export default function ImageUploadField({
-  value, onChange, folder = 'pages',
-}: { value: string; onChange: (url: string) => void; folder?: string }) {
+  value, onChange, folder = 'pages', signature = false,
+}: {
+  value: string;
+  onChange: (url: string) => void;
+  folder?: string;
+  /**
+   * Lift the ink off the paper before storing.
+   *
+   * A company signature is a photograph of a signature on a sheet; a client
+   * signature is drawn on a transparent canvas. Side by side in the same
+   * contract the photograph reads as pasted-in. Cleaning it here means every
+   * document generated afterwards is already right, with nothing to redo.
+   */
+  signature?: boolean;
+}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -18,8 +32,23 @@ export default function ImageUploadField({
     if (!file) return;
     setUploading(true);
     const sb = createClient();
-    const path = `${folder}/${Date.now()}-${file.name}`;
-    const { error } = await sb.storage.from(BUCKET).upload(path, file, { upsert: false });
+
+    // Falls back to the original if the file could not be read as an image or
+    // had no ink in it — better a photograph than nothing at all.
+    let body: File | Blob = file;
+    let name = file.name;
+    if (signature) {
+      const cleaned = await cleanSignatureImage(file);
+      if (cleaned) {
+        body = cleaned;
+        name = `${file.name.replace(/\.[^.]+$/, '')}.png`;
+      } else {
+        toast('Kept the original — no signature could be separated from the background.');
+      }
+    }
+
+    const path = `${folder}/${Date.now()}-${name}`;
+    const { error } = await sb.storage.from(BUCKET).upload(path, body, { upsert: false });
     setUploading(false);
     if (error) { console.error('Image upload failed:', error); toast.error(`Upload failed: ${error.message}`); return; }
     const { data: { publicUrl } } = sb.storage.from(BUCKET).getPublicUrl(path);
@@ -33,7 +62,11 @@ export default function ImageUploadField({
       {value && (
         <div className="relative">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={value} alt="preview" className="w-full h-32 object-cover opacity-70" />
+          <img
+            src={value}
+            alt="preview"
+            className={signature ? 'w-full h-32 object-contain bg-white p-2' : 'w-full h-32 object-cover opacity-70'}
+          />
           <button
             type="button"
             onClick={() => onChange('')}
