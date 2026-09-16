@@ -20,8 +20,25 @@
 /** The colour the client form draws with, so both sides of the contract match. */
 export const SIGNATURE_INK = { r: 0x1a, g: 0x1a, b: 0x1a };
 
-/** Below this much darker than the paper, a pixel is paper, not ink. */
-const NOISE_FLOOR = 18;
+/**
+ * Ink is found in two passes, not one.
+ *
+ * A single threshold cannot separate a pen stroke from a shadow: set it low and
+ * the darker half of the sheet survives as a grey wash the shape of the
+ * photograph, set it high and faint strokes break up. So anything clearly
+ * darker than the paper is ink (STRONG), anything marginally darker is ink only
+ * if it touches ink (WEAK). A shadow is marginal everywhere and touches
+ * nothing, so it goes; the soft edge of a stroke is marginal but connected, so
+ * it stays.
+ */
+const WEAK_FLOOR = 16;
+const STRONG_FLOOR = 46;
+
+/** Ink is a fraction of a signature's own depth range, not a fixed number. */
+const STRONG_FRACTION = 0.34;
+
+/** Below this the pixel contributes nothing visible and only dirties the edge. */
+const MIN_ALPHA = 24;
 
 /** Ink rarely fills a photo; this keeps a stray dark edge from defeating the crop. */
 const TRIM_PADDING = 6;
@@ -104,35 +121,88 @@ export async function cleanSignatureImage(
     // How dark the darkest real ink is, so faint signatures still reach full
     // opacity instead of coming out grey.
     let darkest = bg;
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] < 8) continue;
-      const l = luminance(data[i], data[i + 1], data[i + 2]);
-      if (l < darkest) darkest = l;
+    if (!alreadyCut) {
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] < 8) continue;
+        const l = luminance(data[i], data[i + 1], data[i + 2]);
+        if (l < darkest) darkest = l;
+      }
     }
-    const range = Math.max(1, bg - darkest);
+    // For an alpha-carried signature the scale is the alpha channel's own.
+    const range = alreadyCut ? 255 : Math.max(1, bg - darkest);
+
+    // Pass one: how strongly each pixel reads as ink.
+    //
+    // On a photograph that is how far below the paper it sits. On an image that
+    // already has an alpha channel — a drawn signature, or one of these that has
+    // been through here before — the ink is the alpha itself; reading luminance
+    // there would see the flat ink colour everywhere and call a faint wash
+    // solid, so a second pass would never clean up what a first pass left.
+    const depth = new Float32Array(w * h);
+    for (let p = 0; p < w * h; p++) {
+      const i = p * 4;
+      if (data[i + 3] < 8) {
+        depth[p] = 0;
+      } else if (alreadyCut) {
+        depth[p] = data[i + 3];
+      } else {
+        depth[p] = bg - luminance(data[i], data[i + 1], data[i + 2]);
+      }
+    }
+
+    // Definite ink: clearly darker than the paper, judged against this
+    // signature's own range so a faint pen is not held to a bold pen's standard.
+    const strongAt = Math.max(STRONG_FLOOR, range * STRONG_FRACTION);
+
+    // Pass two: grow outward from definite ink through the marginal pixels.
+    // A shadow is marginal everywhere and never touches ink, so it is left
+    // behind; the soft halo of a stroke is marginal but attached, so it comes.
+    const keep = new Uint8Array(w * h);
+    const stack: number[] = [];
+
+    for (let p = 0; p < w * h; p++) {
+      if (depth[p] >= strongAt) {
+        keep[p] = 1;
+        stack.push(p);
+      }
+    }
+
+    while (stack.length > 0) {
+      const p = stack.pop() as number;
+      const x = p % w;
+      const y = (p / w) | 0;
+
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const q = ny * w + nx;
+          if (keep[q] || depth[q] < WEAK_FLOOR) continue;
+          keep[q] = 1;
+          stack.push(q);
+        }
+      }
+    }
 
     let minX = w, minY = h, maxX = -1, maxY = -1;
 
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4;
+        const p = y * w + x;
+        const i = p * 4;
 
-        if (data[i + 3] < 8) {
+        if (!keep[p]) {
           data[i + 3] = 0;
           continue;
         }
 
-        const depth = bg - luminance(data[i], data[i + 1], data[i + 2]);
-
-        if (depth <= NOISE_FLOOR) {
-          data[i + 3] = 0;
-          continue;
-        }
-
-        // Alpha follows how far below the paper this pixel sits, which keeps the
-        // soft edges of a pen stroke soft instead of turning it into a stencil.
-        const alpha = Math.min(255, Math.round(((depth - NOISE_FLOOR) / range) * 255 * 1.6));
-        if (alpha <= 0) {
+        // Alpha still follows depth, so a stroke keeps its soft edge rather
+        // than becoming a stencil — but anything too faint to read is dropped
+        // instead of laying down a grey film.
+        const alpha = Math.min(255, Math.round(((depth[p] - WEAK_FLOOR) / range) * 255 * 1.9));
+        if (alpha < MIN_ALPHA) {
           data[i + 3] = 0;
           continue;
         }
